@@ -5,18 +5,27 @@ if (!require(data.table)) {
     library(data.table)
 }
 if (!require(biomaRt)) {
-    install.packages("biomaRt")
+    BiocInstaller::biocLite("biomaRt")
     library(biomaRt)
 }
+if (!require(curl)) {
+    install.packages("curl")
+    library(curl)
+}
+
 
 # ==== Create a dictionary for all genes ====
 # Load a gene expression file
 exp_file <- get(load("~/Project/SummarizedExperiments/mRNA/TCGA-ACC_GeneExpression.rdata"))
 all_genes <- rownames(exp_file)
-
-myMart = useMart(biomart = "ensembl",
-                 dataset = "hsapiens_gene_ensembl")
-atts <- listAttributes(myMart, what = "name")
+# Use an older version of biomaRt to ensure hg19 coordinates are retrieved
+ensembl_75 = useMart(
+    biomart = "ENSEMBL_MART_ENSEMBL",
+    host = "feb2014.archive.ensembl.org",
+    path = "/biomart/martservice",
+    dataset = "hsapiens_gene_ensembl"
+)
+atts <- listAttributes(ensembl_75, what = "name")
 atts[grep(pattern = "gene", x = atts, ignore.case = T)]
 atts[grep(pattern = "exon", x = atts, ignore.case = T)]
 atts[grep(pattern = "location", x = atts, ignore.case = T)]
@@ -24,17 +33,17 @@ atts[grep(pattern = "entrez", x = atts, ignore.case = T)]
 # Retrieve relevant attributes
 length(all_genes)
 dict <- biomaRt::getBM(attributes = c("ensembl_gene_id", "entrezgene",
-                                      "external_gene_name",
-                                      "gene_biotype", "percentage_gene_gc_content",
+                                      "external_gene_id",
+                                      "gene_biotype",
                                       'chromosome_name', 'start_position',
                                       'end_position', 'strand'),
                        filters = "ensembl_gene_id", values = all_genes,
-                       mart = myMart)
+                       mart = ensembl_75)
 dict_dt <- as.data.table(dict)
 nrow(dict_dt)
 t <- biomaRt::getBM(attributes = c("ensembl_gene_id", "ensembl_exon_id"),
                     filters = "ensembl_gene_id", values = all_genes,
-                    mart = myMart)
+                    mart = ensembl_75)
 t <- as.data.table(t)
 t[, exon_count := nrow(.SD), by = ensembl_gene_id]
 exon_counts <- unique(t[, c("ensembl_gene_id", "exon_count")])

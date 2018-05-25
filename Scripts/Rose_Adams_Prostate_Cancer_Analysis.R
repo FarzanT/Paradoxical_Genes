@@ -1,58 +1,6 @@
 # Rose_Adams_Prostate_Cancer_Analysis.R
 
-if (!require(data.table)) {
-    install.packages("data.table")
-    library(data.table)
-}
-if (!require(DESeq2)) {
-    install.packages("DESeq2")
-    library(DESeq2)
-}
-if (!require(SummarizedExperiment)) {
-    install.packages("SummarizedExperiment")
-    library(SummarizedExperiment)
-}
-if (!require(GEOquery)) {
-    BiocInstaller::biocLite("GEOquery")
-    library(GEOquery)
-}
-if (!require(biomaRt)) {
-    install.packages("biomaRt")
-    library(biomaRt)
-}
-if (!require(affy)) {
-    BiocInstaller::biocLite("affy")
-    library(affy)
-}
-if (!require(limma)) {
-    BiocInstaller::biocLite("limma")
-    library(limma)
-}
-if (!require(genomewidesnp6Crlmm)) {
-    BiocInstaller::biocLite("genomewidesnp6Crlmm")
-    # BiocInstaller::biocLite("genomewidesnp6_cdf")
-    library(genomewidesnp6Crlmm)
-}
-if (!require(crlmm)) {
-    BiocInstaller::biocLite("crlmm")
-    library(crlmm)
-}
-# The ff package allows better large dataset support and RAM usage
-if (!require(ff)) {
-    BiocInstaller::biocLite("ff")
-    library(ff)
-}
-# VanillaICE is used to process copy number data
-if (!require(VanillaICE)) {
-    BiocInstaller::biocLite("VanillaICE")
-    library(VanillaICE)
-}
-if (!require(DNAcopy)) {
-    BiocInstaller::biocLite("DNAcopy")
-    library(DNAcopy)
-}
-
-
+source("Scripts/Package_Setup.R")
 
 dir.create("mySummarizedExperiments")
 dir.create("limma_Results")
@@ -231,8 +179,6 @@ cel_files <- c(cel_files, adj_normal)
 
 untar(tarfile = "GEO_Files/GSE70770_RAW.tar",
       files = cel_files, verbose = T, exdir = "GEO_Files/Rose_Adams_CEL_Files")
-cnv_batch <- affy::ReadAffy(filenames = paste0("GEO_Files/Rose_Adams_CEL_Files/",
-                                               cel_files), compress = T, verbose = T)
 
 # Generate full paths
 full_paths <- paste0("GEO_Files/Rose_Adams_CEL_Files/",
@@ -339,8 +285,209 @@ saveRDS(CNA.object, file = "Rose_Adams_CNA_Object.rds")
 smoothed_CNA <- smooth.CNA(CNA.object)
 
 # Perform circular binary segmentation (CBS) to calculated probe intensities
-# across genomic regions (this may take some time)
-cbs.segments <- segment(smoothed_CNA)
+# across genomic regions (this will take some time)
+cbs.segments <- segment(smoothed_CNA, verbose = 2)
 
 # Save
 saveRDS(cbs.segments, "Rose_Adams_CBS.rds")
+
+
+cbs.segments <- readRDS("Rose_Adams_CBS.rds")
+# cbs.segments <- readRDS("Rose_Adams_CBS.rds")
+class(cbs.segments)
+object.size(cbs.segments)
+
+# Extract processed segment data
+segment_data <- as.data.table(cbs.segments$output)
+colnames(segment_data)
+segment_data$seg.mean
+
+# Remove rows that have NA in start, end columns or chrom
+segment_data <- segment_data[!is.na(loc.start) & !is.na(loc.end) & !is.na(chrom)]
+colnames(segment_data) <- c("Sample", "Chromosome", "Start", "End",
+                            "Num_Probes", "Segment_Mean")
+# Transform the segment means to 
+# Create a GRanges object for range related analysis (e.g. finding overlaps)
+cur_seqinfo <- Seqinfo(
+    seqnames = as.character(seq_along(1:nrow(segment_data))),
+    seqlengths = segment_data$End - segment_data$Start,
+    isCircular = rep(F, nrow(segment_data)),
+    genome = "hg19"
+)
+seg_granges <-
+    makeGRangesFromDataFrame(
+        df = segment_data,
+        keep.extra.columns = T,
+        ignore.strand = T,
+        seqnames.field = "Chromosome",
+        start.field = "Start",
+        end.field = "End", seqinfo = cur_seqinfo
+    )
+
+# Re-annotate samples based on type (batch info from oligoClass is lost)
+cel_files <- list.files("Unzipped_CEL_Files/", full.names = T)
+batch_types <- vector(mode = "character", length = length(cel_files))
+batch_types[grepl(pattern = "T\\.CEL", x = cel_files)] <- "Tumor"
+# Everything else is Normal
+batch_types[!grepl(pattern = "T\\.CEL", x = cel_files)] <- "Normal"
+samples <- gsub(pattern = ".*(GSM\\d{7})_.*", replacement = "\\1", x = cel_files)
+sample_dict <- data.table(Samples = samples, Types = batch_types)
+
+all_types <- merge(as.data.table(mcols(seg_granges)), sample_dict, by.x = "Sample", by.y = "Samples")
+mcols(seg_granges) <- all_types
+
+# Use the function defined in CNA_to_Gene_Analysis.R to measure segment means in
+# 10KB segments in the hg19 genome, and then overlap significantly aberrated
+# segments (found using Mann-Whitney Test) with known gene locations
+# (again, in hg19)
+source("Scripts/CNA_to_Gene_Analysis.R")
+
+# Analyze CNA data and find genes in significantly aberrated regions
+# RDS file will be saved as name + CNA_gain_loss 
+analyze_cna(cur_cnv = seg_granges, sample_dict = sample_dict, study_name = "Rose_Adams")
+
+
+# Differential Expression Analysis ====
+all_files <- untar("GEO_Files/GSE70770_RAW.tar", list = T)
+grep(pattern = ".*GSM18179\\d\\d.*", x = all_files, ignore.case = T)
+"GSM1817999"
+# Find idat files
+idat_files <- all_files[grep(pattern = "idat",
+                            x = all_files, ignore.case = F)]
+dir.create("Rose_Adams_IDAT_Files")
+untar(tarfile = "GEO_Files/GSE70770_RAW.tar", files = idat_files, 
+      exdir = "Rose_Adams_IDAT_Files")
+
+# Untar the bgx files
+untar(tarfile = "GEO_Files/GSE70770_RAW.tar",
+      files = c("GPL10558_HumanHT-12_V4_0_R1_15002873_B.txt.gz",
+                "GPL10558_HumanHT-12_V4_0_R2_15002873_B.txt.gz",
+                "GPL20641_HumanOmni2.5M-8v1-1_B.bpm.gz",
+                "GPL20641_HumanOmni25M-8v1-1_B.csv.gz"),
+      exdir = "Rose_Adams_IDAT_Files")
+
+# Unzip all files in that directory with a command
+all_files <- list.files("Rose_Adams_IDAT_Files/", full.names = T)
+for (file in all_files) {
+    gunzip(
+        filename = file,
+        destname = gsub(
+            pattern = ".gz",
+            replacement = "",
+            x = file),
+        overwrite = F, remove = T)
+    
+}
+gc()
+
+# Read and parse HTSeq data from downloaded GEO data (takes some time)
+htseq_data <-
+    GEOquery::getGEO(
+        GEO = "GSE70768",
+        destdir = "GEO_Files/",
+        GSEMatrix = T,
+        parseCharacteristics = F,
+        getGPL = F
+    )
+htseq_data <- htseq_data$GSE70768_series_matrix.txt.gz
+# Add tissue type
+benign <- sampleNames(htseq_data)[grepl(pattern = "benign", x = htseq_data$title)]
+tumor <- sampleNames(htseq_data)[!grepl(pattern = "benign", x = htseq_data$title)]
+htseq_data$`tissue_type` <- "TEMP"
+htseq_data$tissue_type[grepl(pattern = "benign", x = htseq_data$title)] <- "Benign"
+htseq_data$tissue_type[!grepl(pattern = "benign", x = htseq_data$title)] <- "Tumor"
+
+# source("Scripts/PCA_gene_exp.R")
+# pcaPlot(object = htseq_data, projectName = "Rose Adams", intgroup = "tissue_type", ntop = 40000)
+
+# Note that this data is already processesed and normalized:
+# https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSM1817707
+
+
+# tumor_htseq <-
+#     GEOquery::getGEO(filename = "GEO_Files/GSE70768_non_normalized_tumor.txt.gz",
+#                      destdir = "GEO_Files/",
+#                      GSEMatrix = T,
+#                      parseCharacteristics = T,
+#                      getGPL = F
+#     )
+# Convert to SummarizedExperiment for use with limma
+htseq_sumex <- makeSummarizedExperimentFromExpressionSet(htseq_data)
+source("Scripts/limma_func.R")
+limma_func(
+    cur_sum_ex = htseq_sumex,
+    cur_plot_name = "Rose Adams Prostate Cancer Experiment",
+    cur_min_lfc = 1,
+    cur_max_pval = 0.05,
+    cur_group_name = "tissue_type",
+    cur_limma_file_name = "Rose_Adams"
+)
+
+# Read the results
+dea_results <- fread("Rose_Adams_limma_diff_ex_results.txt")
+
+# Find differentially expressed genes
+sig_diff <- dea_results[abs(logFC) > 1 & adj.P.Val <= 0.05]
+
+# Match Illumina probes to genes
+source("Scripts/probes_to_genes.R")
+cur_mapping <- probes_to_genes(probes = sig_diff$rn, type = "illumina_humanht_12_v4")
+# Merge
+sig_diff <- merge(sig_diff, cur_mapping, by.x = "rn", by.y = "illumina_humanht_12_v3")
+
+# Find anti-correlated genes
+cur_dea <- list(gain = sig_diff[logFC >= 1]$ensembl_gene_id, loss = sig_diff[logFC <= -1]$ensembl_gene_id)
+cur_cna <- readRDS("Rose_Adams_CNA_gain_loss_genes.rds")
+
+source("Scripts/find_paradoxical.R")
+cur_parad <- find_paradoxical(cna_list = cur_cna, dea_list = cur_dea)
+
+# Save
+saveRDS(cur_parad, "Rose_Adams_Paradoxical_Genes.rds")
+
+
+# Find the status of TCGA's paradoxical genes in this dataset ======================================
+# Read TCGA-PRAD's paradoxical genes
+tcga_parad <- readRDS("~/Project/Paradoxical_Genes/DESeq2_paradoxical_TCGA-PRAD.rds")
+
+# Read the Rose-Adams diff-ex and copy number results
+dea_results <- fread("Rose_Adams_limma_all_ex_results.txt")
+copy_results <- fread("Rose_Adams_CNA_nonparam_results.txt")
+gene_dict <- fread("gene_dictionary.txt")
+# Discard chrY
+gene_dict <- gene_dict[chromosome_name %in% c(1:22, "X")]
+# Change chrX and chrY to 23 and 24
+gene_dict$chromosome_name[gene_dict$chromosome_name == "X"] <- "23"
+gene_dict$chromosome_name <- as.integer(gene_dict$chromosome_name)
+
+# Convert to GRanges
+genome_gr <-
+    makeGRangesFromDataFrame(
+        df = gene_dict[, c("start_position",
+                           "end_position",
+                           "chromosome_name",
+                           "ensembl_gene_id")],
+        keep.extra.columns = T,
+        ignore.strand = T,
+        seqnames.field = "chromosome_name",
+        start.field = "start_position",
+        end.field = "end_position")
+
+
+cur_cn_status <-
+    find_cn_status(
+        query_gain = tcga_parad$over_exp_parad,
+        query_loss = tcga_parad$under_exp_parad,
+        segment_values = copy_results,
+        thresh = 0.1,
+        gene_dict = gene_dict,
+        genome_granges = genome_gr
+    )
+cur_exp_status <- find_exp_status(query_gain = tcga_parad$over_exp_parad,
+                                  query_loss = tcga_parad$under_exp_parad,
+                                  lfc_table = dea_results, probe = TRUE,
+                                  probe_type = "illumina_humanht_12_v4")
+
+# Save
+saveRDS(list(cn_status = cur_cn_status, exp_status = cur_exp_status),
+        "Rose_Adams_TCGA_Comparison.rds")
