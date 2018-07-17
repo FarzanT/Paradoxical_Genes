@@ -105,25 +105,25 @@ genes_in_segment <- function(segment_values, pval_less_col, pval_grtr_col, p_thr
                              pval_thresh = 0.05, copy_thresh = FALSE, thresh = 0.1, gene_dict,
                              genome_granges) {
     # Find the genes in significant segments:
-    if (thresh == T) {
+    if (!copy_thresh) {
         all_less_gr <- tryCatch(expr = {
-            makeGRangesFromDataFrame(df = all[pval_less_col <= pval_thresh,
-                                              c("seqnames", "start", "end", pval_grtr_col), with = F],
+            makeGRangesFromDataFrame(df = segment_values[wilcox_p_less_adj <= pval_thresh,
+                                              c("seqnames", "start", "end", "wilcox_p_less_adj"), with = F],
                                      seqnames.field = "seqnames", keep.extra.columns = T)
         }, error = function(...) return(NULL))
         
         all_grtr_gr <- tryCatch(expr = {
-            makeGRangesFromDataFrame(df = all[pval_grtr_col <= pval_thresh,
-                                              c("seqnames", "start", "end", pval_grtr_col)],
+            makeGRangesFromDataFrame(df = segment_values[wilcox_p_grtr_adj <= pval_thresh,
+                                              c("seqnames", "start", "end", "wilcox_p_grtr_adj")],
                                      seqnames.field = "seqnames", keep.extra.columns = T)
         }, error = function(...) return(NULL))
-    } else if (copy_thresh = T) {
+    } else if (copy_thresh == T) {
         sample_cols <- colnames(all)[grepl(pattern = "GSM", x = colnames(all))]
         # Subset based on copy number thresholds (thresh difference from ploidy), count the samples
         # that fall into gain, loss and neutral category
-        all[, count_gain := sum(.SD >= 2 + thresh), .SDcols = sample_cols, by = "index"]
-        all[, count_loss := sum(.SD <= 2 - thresh), .SDcols = sample_cols, by = "index"]
-        all[, count_neut := length(sample_cols) - sum(count_gain, count_loss), by = "index"]
+        segment_values[, count_gain := sum(.SD >= 2 + thresh), .SDcols = sample_cols, by = "index"]
+        segment_values[, count_loss := sum(.SD <= 2 - thresh), .SDcols = sample_cols, by = "index"]
+        segment_values[, count_neut := length(sample_cols) - sum(count_gain, count_loss), by = "index"]
         
         all_gr <- tryCatch(expr = {
             makeGRangesFromDataFrame(df = all[, c("seqnames", "start", "end", pval_less_col, pval_grtr_col), with = F],
@@ -141,22 +141,26 @@ genes_in_segment <- function(segment_values, pval_less_col, pval_grtr_col, p_thr
     
     
     # Find overlaps with gene dictionary
-    loss <- NULL
-    gain <- NULL
-    if (!is.null(all_less_gr)) {
-        all_less_ol <- findOverlaps(query = all_less_gr, subject = genome_gr, type = "any")
-        # Find genome hits, classify gain and loss
-        loss <- genome_gr[unique(subjectHits(all_less_ol)), ]$ensembl_gene_id
+    if (!copy_thresh) {
+        loss <- NULL
+        gain <- NULL
+        if (!is.null(all_less_gr)) {
+            all_less_ol <- findOverlaps(query = all_less_gr, subject = genome_gr, type = "any")
+            # Find genome hits, classify gain and loss
+            loss <- genome_gr[unique(subjectHits(all_less_ol)), ]$ensembl_gene_id
+        }
+        if (!is.null(all_grtr_gr)) {
+            all_grtr_ol <- findOverlaps(query = all_grtr_gr, subject = genome_gr, type = "any")
+            gain <- genome_gr[unique(subjectHits(all_grtr_ol)), ]$ensembl_gene_id
+            # gain_pval <- all_grtr_gr[unique(queryHits(all_grtr_ol)), ]$wilcox_p_grtr_adj
+        return(list(loss = loss, gain = gain))
+        }
+    } else {
+        # count_freq <-  
     }
-    if (!is.null(all_grtr_gr)) {
-        all_grtr_ol <- findOverlaps(query = all_grtr_gr, subject = genome_gr, type = "any")
-        gain <- genome_gr[unique(subjectHits(all_grtr_ol)), ]$ensembl_gene_id
-        # gain_pval <- all_grtr_gr[unique(queryHits(all_grtr_ol)), ]$wilcox_p_grtr_adj
-    }
-    
-    return(list(loss = loss, gain = gain))
 }
 
+genes_in_segment <- compiler::cmpfun(genes_in_segment)
 analyze_cna <- function(cur_cnv, sample_dict, study_name, destdir = getwd(), pval_thresh = 1) {
     # Find overlaps of each sample separately for less memory usage
     overlap <- findOverlaps(query = cur_cnv, subject = bin_gr,
@@ -173,52 +177,17 @@ analyze_cna <- function(cur_cnv, sample_dict, study_name, destdir = getwd(), pva
     # Order and hash data.table based on specified columns
     setkey(x = all, seqnames, start, end)
     
-    # sample_dict <- unique(data.table(Samples = cur_cnv$Sample, Types = cur_cnv$Types))
-    # find_ov <- function(sample) {
-    #     # Subset GRanges by Sample
-    #     cur_sample <- cur_cnv[cur_cnv$Sample == sample]
-    #     # Find the overlaps between the binned ranges
-    #     overlap <- findOverlaps(query = cur_sample, subject = bin_gr,
-    #                             type = "any", select = "all")
-    #     final <- as.data.table(cur_sample[queryHits(overlap)]$Segment_Mean)
-    #     
-    #     final2 <- as.data.table(bin_gr[subjectHits(overlap), ])[, c(1, 2, 3)]
-    #     final <- cbind(final2, final, rep(sample, nrow(final)))
-    #     colnames(final) <- c("seqnames", "start", "end", "Segment_Mean", "sample")
-    #     
-    #     # Change shape to have samples as columns
-    #     wide <- dcast.data.table(data = final, formula = seqnames + start + end ~ sample,
-    #                              value.var = "Segment_Mean", fun.aggregate = sum)
-    #     # Order and hash data.table based on specified columns
-    #     setkey(x = wide, seqnames, start, end)
-    #     return(wide)
-    # }
-    # all_samples <- unique(cur_cnv$Sample)
-    # find_ov <- compiler::cmpfun(find_ov)
-    # all_overlaps <- list()
-    # for (sample in all_samples) {
-    #     all_overlaps[[sample]] <- find_ov(sample)
-    # }
-    # 
-    # rm("cur_cnv")
-    # # Merge all columns
-    # # NOTE: THE FOLLOWING COMMAND TAKES A LONG TIME TO PROCESS, LOAD SAVED RESULTS
-    # # WHEN AVAILABLE
-    # system.time({
-    #     all <- Reduce(function(...) merge(..., by = c("seqnames", "start", "end")), all_overlaps)
-    # })
-    # rm(list = c("all_overlaps"))
     gc()
     
     # Calculate Wilcoxon-test p-values, ensure to compare x: TP to y:NT
-    wc_func <- function(row) {
+    wc_func <- function(cur_row) {
         less <-
-            wilcox.test(x = unlist(all[row, sample_dict[Types == "Tumor"]$Samples, with = F]),
-                        y = unlist(all[row, sample_dict[Types == "Normal"]$Samples, with = F]),
+            wilcox.test(x = unlist(all[cur_row, sample_dict[Types == "Tumor"]$Samples, with = F]),
+                        y = unlist(all[cur_row, sample_dict[Types == "Normal"]$Samples, with = F]),
                         alternative = "less")$p.value
         greater <-
-            wilcox.test(x = unlist(all[row, sample_dict[Types == "Tumor"]$Samples, with = F]),
-                        y = unlist(all[row, sample_dict[Types == "Normal"]$Samples, with = F]),
+            wilcox.test(x = unlist(all[cur_row, sample_dict[Types == "Tumor"]$Samples, with = F]),
+                        y = unlist(all[cur_row, sample_dict[Types == "Normal"]$Samples, with = F]),
                         alternative = "greater")$p.value
         return(data.table(less = less, greater = greater))
     }
@@ -231,7 +200,7 @@ analyze_cna <- function(cur_cnv, sample_dict, study_name, destdir = getwd(), pva
             X = 1:nrow(all),
             FUN = wc_func,
             mc.preschedule = T,
-            mc.cores = 16,
+            mc.cores = 8,
             mc.cleanup = T
         )
         wc_results <- rbindlist(wc_results)
@@ -247,26 +216,35 @@ analyze_cna <- function(cur_cnv, sample_dict, study_name, destdir = getwd(), pva
     
     all$index <- seq(1, nrow(all))
     
+    # Medians and averages per tissue type
+    all[, NT_median := median(unlist(.SD), na.rm = T),
+                   by = "seqnames", .SDcols = sample_dict[Types == "Normal"]$Samples]
+    all[, TP_median := median(unlist(.SD), na.rm = T),
+                   by = "seqnames", .SDcols = sample_dict[Types == "Tumor"]$Samples]
+    all[, NT_mean := mean(unlist(.SD), na.rm = T),
+        by = "seqnames", .SDcols = sample_dict[Types == "Normal"]$Samples]
+    all[, TP_mean := mean(unlist(.SD), na.rm = T),
+        by = "seqnames", .SDcols = sample_dict[Types == "Tumor"]$Samples]
+    
     # Save
     fwrite(all, paste0(destdir, "/", study_name, "_CNA_nonparam_results.txt"))
-    # # Plot segment data ====
-    # # Medians and averages per tissue type
-    # all[, NT_median := median(unlist(.SD), na.rm = T),
-    #                by = "seqnames", .SDcols = sample_dict[Types == "Normal"]$Samples]
-    # all[, TP_median := median(unlist(.SD), na.rm = T),
-    #                by = "seqnames", .SDcols = sample_dict[Types == "Tumor"]$Samples]
-    # all[, NT_mean := mean(unlist(.SD), na.rm = T),
-    #     by = "seqnames", .SDcols = sample_dict[Types == "Normal"]$Samples]
-    # all[, TP_mean := mean(unlist(.SD), na.rm = T),
-    #     by = "seqnames", .SDcols = sample_dict[Types == "Tumor"]$Samples]
-    # 
+    
     # # Save the current results
     # fwrite(all, paste0(study_name, "_CNA_Genome_Overlap.csv"))
     # 
-    # merge(as.data.table(colnames(all)[4:125]), sample_dict, by.x = "V1", by.y = "Samples")
+    # # Plot segment data ====
+    # # merge(as.data.table(colnames(all)[4:125]), sample_dict, by.x = "V1", by.y = "Samples")
     # # ==== Plot of segment means with no thresholds ====
     # # png(filename = paste0("CNA_Plots/SegMean_Dist_No_Thresh_", proj, ".png"),
     # #     res = 220, height = 1000, width = 2000)
+    # library(devtools)
+    # install_github("dantaki/CNVplot")
+    # library(CNVplot)
+    # 
+    # cur_cnv <- all[, c("seqnames", "start", "TP_mean", "NT_median", "TP_median"), with = F]
+    # colnames(cur_cnv) <- c("CHROM", "POSITION", "PROBAND", "MOTHER", "FATHER")
+    # CNVplot(df = cur_cnv, genome = "hg19", title = "Average Copy Number Variation")
+    # 
     # plot(x = all$index, y = all$NT_mean, col = "blue",
     #                pch = 20, cex = 0.01, ylim = c(-4, 4), xaxt = "n",
     #      xlab = "", ylab = "")
@@ -294,13 +272,13 @@ analyze_cna <- function(cur_cnv, sample_dict, study_name, destdir = getwd(), pva
     #     by = c("seqnames", "start", "end"), .SDcols = all_samples[type == "TP"]$aliquot_id]
     
     loss_and_gain <- genes_in_segment(segment_values = all, pval_less_col = "wilcox_p_less_adj",
-                     pval_grtr_col = "wilcox_p_grtr_adj", pval_thresh = pval_thresh,
+                     pval_grtr_col = "wilcox_p_grtr_adj", pval_thresh = 0.01,
                      gene_dict = gene_dict, genome_granges = genome_gr)
     # Save
     saveRDS(object = loss_and_gain,
             file = paste0(destdir, "/", study_name, "_CNA_gain_loss_genes.rds"))
     
-    rm(list = c("wc_results", "all_less_gr", "all_grtr_gr"))
+    rm(list = c("wc_results", "all_less_gr"))
     gc()
 }
 analyze_cna <- compiler::cmpfun(analyze_cna)

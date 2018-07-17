@@ -4,6 +4,7 @@ source("Scripts/Package_Setup.R")
 
 dir.create("mySummarizedExperiments")
 dir.create("limma_Results")
+dir.create("Rose_Adams_Prostate")
 
 source("limma_func.R")
 
@@ -114,7 +115,9 @@ limma_func(
     cur_limma_file_name = "Rose_Adams_Prostate",
     cur_min_lfc = 1,
     cur_max_pval = 0.01,
-    cur_group_name = "Sample_Group"
+    cur_group_name = "Sample_Group",
+    MA_plot = T,
+    destdir = "Rose_Adams_Prostate"
 )
 
 
@@ -188,7 +191,7 @@ for (file in full_paths) {
     gunzip(
         filename = file,
         destname = paste0(
-            "Unzipped_CEL_Files/",
+            "Rose_Adams_Prostate/Unzipped_CEL_Files/",
             gsub(
                 pattern = ".gz",
                 replacement = "",
@@ -210,11 +213,11 @@ cur_cel <- crlmm::genotype(filenames = cel_files, cdfName = "genomewidesnp6",
                            batch = batch_types)
 
 # Save
-saveRDS(cur_cel, "Rose_Adams_CNV_SNPset.rds")
+saveRDS(cur_cel, "Rose_Adams_Prostate/Rose_Adams_CNV_SNPset.rds")
 
 
 # Read SNPset
-cur_cel <- readRDS("Rose_Adams_CNV_SNPset.rds")
+cur_cel <- readRDS("Rose_Adams_Prostate/Rose_Adams_CNV_SNPset.rds")
 # Change sample names to GSM IDs
 sampleNames(cur_cel) <-
     gsub(pattern = "_TG.+\\.CEL",
@@ -238,7 +241,7 @@ phenoData(cur_cel) <- combine(phenoData(cur_cel), phenoData(prostate_beadchip))
 # featureData(cur_cel) <- combine(featureData(cur_cel), featureData(prostate_beadchip))
 
 # Save 
-saveRDS(cur_cel, "Rose_Adams_CNV_SNPset.rds")
+saveRDS(cur_cel, "Rose_Adams_Prostate/Rose_Adams_CNV_SNPset.rds")
 
 # We now we have a CNset
 class(cur_cel)
@@ -279,7 +282,7 @@ class(CNA.object)
 object.size(CNA.object) / 10e6 # ~ 200 MB
 
 # Save
-saveRDS(CNA.object, file = "Rose_Adams_CNA_Object.rds")
+saveRDS(CNA.object, file = "Rose_Adams_Prostate/Rose_Adams_CNA_Object.rds")
 
 # Smoothen to remove single point outliers
 smoothed_CNA <- smooth.CNA(CNA.object)
@@ -289,10 +292,10 @@ smoothed_CNA <- smooth.CNA(CNA.object)
 cbs.segments <- segment(smoothed_CNA, verbose = 2)
 
 # Save
-saveRDS(cbs.segments, "Rose_Adams_CBS.rds")
+saveRDS(cbs.segments, "Rose_Adams_Prostate/Rose_Adams_CBS.rds")
 
 
-cbs.segments <- readRDS("Rose_Adams_CBS.rds")
+cbs.segments <- readRDS("Rose_Adams_Prostate/Rose_Adams_CBS.rds")
 # cbs.segments <- readRDS("Rose_Adams_CBS.rds")
 class(cbs.segments)
 object.size(cbs.segments)
@@ -325,7 +328,7 @@ seg_granges <-
     )
 
 # Re-annotate samples based on type (batch info from oligoClass is lost)
-cel_files <- list.files("Unzipped_CEL_Files/", full.names = T)
+cel_files <- list.files("Rose_Adams_Prostate/Unzipped_CEL_Files/", full.names = T)
 batch_types <- vector(mode = "character", length = length(cel_files))
 batch_types[grepl(pattern = "T\\.CEL", x = cel_files)] <- "Tumor"
 # Everything else is Normal
@@ -344,7 +347,8 @@ source("Scripts/CNA_to_Gene_Analysis.R")
 
 # Analyze CNA data and find genes in significantly aberrated regions
 # RDS file will be saved as name + CNA_gain_loss 
-analyze_cna(cur_cnv = seg_granges, sample_dict = sample_dict, study_name = "Rose_Adams")
+analyze_cna(cur_cnv = seg_granges, sample_dict = sample_dict, study_name = "Rose_Adams",
+            destdir = "Rose_Adams_Prostate", pval_thresh = 1)
 
 
 # Differential Expression Analysis ====
@@ -424,7 +428,7 @@ limma_func(
 )
 
 # Read the results
-dea_results <- fread("Rose_Adams_limma_diff_ex_results.txt")
+dea_results <- fread("Rose_Adams_Prostate/Rose_Adams_limma_diff_ex_results.txt")
 
 # Find differentially expressed genes
 sig_diff <- dea_results[abs(logFC) > 1 & adj.P.Val <= 0.05]
@@ -437,22 +441,39 @@ sig_diff <- merge(sig_diff, cur_mapping, by.x = "rn", by.y = "illumina_humanht_1
 
 # Find anti-correlated genes
 cur_dea <- list(gain = sig_diff[logFC >= 1]$ensembl_gene_id, loss = sig_diff[logFC <= -1]$ensembl_gene_id)
-cur_cna <- readRDS("Rose_Adams_CNA_gain_loss_genes.rds")
+cur_cna <- readRDS("Rose_Adams_Prostate/Rose_Adams_CNA_gain_loss_genes.rds")
 
 source("Scripts/find_paradoxical.R")
 cur_parad <- find_paradoxical(cna_list = cur_cna, dea_list = cur_dea)
 
 # Save
-saveRDS(cur_parad, "Rose_Adams_Paradoxical_Genes.rds")
+saveRDS(cur_parad, "Rose_Adams_Prostate/Rose_Adams_Paradoxical_Genes.rds")
 
+# Save LFC table with probe names replaced with ENSG IDs ====
+lfc_table <- fread("Rose_Adams_Prostate/Rose_Adams_limma_all_ex_results.txt")
+cur_mapping <-
+    getBM(
+        attributes = c(
+            "illumina_humanht_12_v4",
+            "ensembl_gene_id",
+            "external_gene_name"
+        ),
+        filters = "illumina_humanht_12_v4",
+        values = lfc_table$rn,
+        mart = myMart
+    )
+
+lfc_table$rn <- as.character(lfc_table$rn)
+lfc_table <- merge(lfc_table, cur_mapping, by.x = "rn", by.y = "illumina_humanht_12_v4")
+fwrite(lfc_table, "Rose_Adams_Prostate/Rose_Adams_limma_all_ex_results.txt")
 
 # Find the status of TCGA's paradoxical genes in this dataset ======================================
 # Read TCGA-PRAD's paradoxical genes
 tcga_parad <- readRDS("~/Project/Paradoxical_Genes/DESeq2_paradoxical_TCGA-PRAD.rds")
 
 # Read the Rose-Adams diff-ex and copy number results
-dea_results <- fread("Rose_Adams_limma_all_ex_results.txt")
-copy_results <- fread("Rose_Adams_CNA_nonparam_results.txt")
+dea_results <- fread("Rose_Adams_Prostate/Rose_Adams_limma_all_ex_results.txt")
+copy_results <- fread("Rose_Adams_Prostate/Rose_Adams_CNA_nonparam_results.txt")
 gene_dict <- fread("gene_dictionary.txt")
 # Discard chrY
 gene_dict <- gene_dict[chromosome_name %in% c(1:22, "X")]
@@ -490,4 +511,4 @@ cur_exp_status <- find_exp_status(query_gain = tcga_parad$over_exp_parad,
 
 # Save
 saveRDS(list(cn_status = cur_cn_status, exp_status = cur_exp_status),
-        "Rose_Adams_TCGA_Comparison.rds")
+        "Rose_Adams_Prostate/Rose_Adams_TCGA_Comparison.rds")

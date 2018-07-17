@@ -1,17 +1,21 @@
 # Package_Setup.R
 
+if (!require(stringr)) {
+    install.packages("stringr")
+    library(stringr)
+}
 if (!require(data.table)) {
     install.packages("data.table")
     library(data.table)
 }
-if (!require(DESeq2)) {
-    install.packages("DESeq2")
-    library(DESeq2)
-}
-if (!require(SummarizedExperiment)) {
-    install.packages("SummarizedExperiment")
-    library(SummarizedExperiment)
-}
+# if (!require(DESeq2)) {
+#     install.packages("DESeq2")
+#     library(DESeq2)
+# }
+# if (!require(SummarizedExperiment)) {
+#     install.packages("SummarizedExperiment")
+#     library(SummarizedExperiment)
+# }
 if (!require(GEOquery)) {
     BiocInstaller::biocLite("GEOquery")
     library(GEOquery)
@@ -20,10 +24,10 @@ if (!require(biomaRt)) {
     install.packages("biomaRt")
     library(biomaRt)
 }
-if (!require(affy)) {
-    BiocInstaller::biocLite("affy")
-    library(affy)
-}
+# if (!require(affy)) {
+#     BiocInstaller::biocLite("affy")
+#     library(affy)
+# }
 if (!require(limma)) {
     BiocInstaller::biocLite("limma")
     library(limma)
@@ -55,7 +59,11 @@ if (!require(GenomicRanges)) {
     BiocInstaller::biocLite("GenomicRanges")
     library(GenomicRanges)
 }
-if (!require(minfi)) {
-    BiocInstaller::biocLite("minfi")
-    library(minfi)
-}
+# if (!require(minfi)) {
+#     BiocInstaller::biocLite("minfi")
+#     library(minfi)
+# }
+# if (!require(affxparser)) {
+#     BiocInstaller::biocLite("affxparser")
+#     library(affxparser)
+# }

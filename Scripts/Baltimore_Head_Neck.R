@@ -1,94 +1,75 @@
-# Ovarian.R
-
-# Load required packages
+# Baltimore_Head_Neck.R
 source("Scripts/Package_Setup.R")
-setwd("~/Paradoxical_Genes/")
-# Create directory
-dir.create("BC_Ovarian/")
+
+dir.create("Head_Neck")
+
+cur_cnv <- getGEO("GSE33229")
+
+# Untar files
+dir.create("Affy_CNV")
+dir.create("Affy_EXP")
+
+untar("GSE33205_RAW.tar", exdir = "Affy_EXP/")
+untar("GSE33229_RAW.tar", exdir = "Affy_CNV/")
 
 
-# Download and parse data from GEO; note that this study only has CNA data
-# The following only has the phenotype data
-ovc <- getGEO(
-    GEO = "GSE45584",
-    destdir = "BC_Ovarian/",
-    GSEMatrix = T,
-    AnnotGPL = T,
-    getGPL = T,
-    parseCharacteristics = T
-)
-
-# Extract phenotypic data
-cur_cnv <- ovc$`GSE45584-GPL16895_series_matrix.txt.gz`
-featureNames(cur_cnv)
-
-# Untar downloaded CEL files
-# (from https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE76213&format=file)
-dir.create("All_CEL_Files")
-all_files <- untar(tarfile = "BC_Ovarian/GSE71525_RAW.tar", list = T)
-untar(tarfile = "BC_Ovarian/GSE71525_RAW.tar", exdir = "BC_Ovarian/All_CEL_Files/",
-      files = all_files[grepl(pattern = "CEL", x = all_files)])
-
-# Generate full paths
-full_paths <- list.files("BC_Ovarian/All_CEL_Files/", full.names = T)
-
-# Unzip gz CEL files, be sure to remove the '.gz' extension
-for (file in full_paths) {
-    gunzip(
+# CNV Analysis =====================================================================================
+cel_files <- list.files(path = "Affy_CNV/", pattern = ".CEL.gz", full.names = T)
+for (file in cel_files) {
+    GEOquery::gunzip(
         filename = file,
         destname = paste0(
-            "BC_Ovarian/All_CEL_Files/",
+            "Affy_CNV/",
             gsub(
                 pattern = ".gz",
                 replacement = "",
-                x = basename(file))),
-        remove = T)
+                x = basename(file)
+            )
+        ),
+        remove = T
+    )
 }
 
-# CNV Analysis =====================================================================================
+# Get phenotypic data from GEO (or download, browser is faster)
+setwd("Head_Neck/")
+cur_data <- getGEO("GSE33229")
+cur_data <- cur_data$GSE33229_series_matrix.txt.gz
+cur_pheno <- phenoData(cur_data)
 
-# Use the genotype function (instead of crlmm) to allow for later analysis of
-# CNA data using the CNset class. This quantile normalizes copy numbers
-# The 'batch' parameter requires batch types for downstream CNV analysis; obtain
-# CEL batch types from their names (T for tumor, N for normal)
-ifelse(cur_pheno$characteristics_ch1 == "sample type: Tumour", yes = "Tumor", no = "Normal")
+# Create a sample dictionary
 sample_dict <- data.table(
-    Samples = cur_pheno$geo_accession,
-    Types = str_extract(string = cur_pheno$characteristics_ch1,
-                        pattern = "(T&N)|T"),
-    Files = paste0("BC_Ovarian/All_CEL_Files/",
-                   basename(gsub(pattern = "\\.gz",
-                                 replacement = "",
-                                 x = cur_pheno$supplementary_file)))
+    Samples = cur_data$geo_accession,
+    Types = str_extract(string = cur_data$characteristics_ch1, pattern = "(Pt)|(Ctrl)"),
+    File = paste0(
+        "Affy_CNV/",
+        gsub(
+            pattern = "\\.gz",
+            replacement = "",
+            x = basename(as.character(cur_data$supplementary_file))
+        )
+    )
 )
-sample_dict$Types[sample_dict$Types == "T&N"] <- "Normal"
-sample_dict$Types[sample_dict$Types == "T"] <- "Tumor"
 
-cur_cel <- crlmm::genotype(filenames = sample_dict$Files, cdfName = "genomewidesnp6",
-                           batch = sample_dict$Types, verbose = T, genome = "hg19")
+# for filename in ./*; do tail -n +1 $filename > $filename; done
+# The CEL files contain a blank header; remove first line of each using command line
 
-# Save
-saveRDS(cur_cel, "BC_Ovarian/ovc_CNV_SNPset.rds")
-
-# Read SNPset
-cur_cnset <- readRDS("BC_Ovarian/ovc_CNV_SNPset.rds")
-
-# Change sample names to GSM IDs
-sampleNames(cur_cnset) <-
-    str_extract(string = sampleNames(cur_cnset), pattern = "GSM\\d+")
-
+rm("cur_data")
+gc()
+# Genotype using crlmm
+cur_cnset <- crlmm::genotype(filenames = sample_dict$File, cdfName = "genomewidesnp6",
+                             batch = sample_dict$Types, genome = "hg19", sns = sample_dict$Sample)
 
 # Append phenotype data from GEO
-phenoData(cur_cnset) <- combine(phenoData(cur_cnset), phenoData(cur_pheno))
+phenoData(cur_cnset) <- combine(phenoData(cur_cnset), cur_pheno)
 
 # Save
-saveRDS(cur_cnset, "BC_Ovarian/ovc_raw_CNSet.rds")
+saveRDS(cur_cnset, "Head_Neck_raw_CNSet.rds")
 
 # Perform locus- and allele-specific estimation of copy number
 cur_cnset.updated <- crlmmCopynumber(cur_cnset)
 
 # Save
-saveRDS(cur_cnset, "BC_Ovarian/ovc_CNSet.rds")
+saveRDS(cur_cnset, "Head_Neck_CNSet.rds")
 
 # Re-check batch types
 table(batch(cur_cnset))
@@ -119,10 +100,10 @@ CNA.object <- CNA(genomdat = raw_CNV, chrom = chromosome(cur_cnset),
                   sampleid = sampleNames(cur_cnset),
                   presorted = T)
 class(CNA.object)
-object.size(CNA.object) / 10e6 
+object.size(CNA.object) / 10e6 # ~ 161 MB
 
 # Save
-saveRDS(CNA.object, file = "BC_Ovarian/ovc_CNA_Object.rds")
+saveRDS(CNA.object, file = "Head_Neck_CNA_Object.rds")
 
 # Smoothen to remove single point outliers
 smoothed_CNA <- smooth.CNA(CNA.object)
@@ -132,23 +113,18 @@ smoothed_CNA <- smooth.CNA(CNA.object)
 cbs.segments <- segment(smoothed_CNA, verbose = 2)
 
 # Save
-saveRDS(cbs.segments, "BC_Ovarian/ovc_CBS.rds")
+saveRDS(cbs.segments, "Head_Neck_CBS.rds")
 
 gc()
-cbs.segments <- readRDS("BC_Ovarian/ovc_CBS.rds")
+cbs.segments <- readRDS("Head_Neck_CBS.rds")
 
 class(cbs.segments)
 object.size(cbs.segments)
 
 # Extract processed segment data
 segment_data <- as.data.table(cbs.segments$output)
-# Fix previous GSM improper name
-# segment_data$ID <- str_extract(string = segment_data$ID, pattern = "GSM\\d+")
-# cbs.segments$output <- segment_data
-# saveRDS(cbs.segments, "ovc_CCA/ovc_CBS.rds")
-
 colnames(segment_data)
-segment_data$ID
+segment_data$seg.mean
 
 # Remove rows that have NA in start, end columns or chrom
 segment_data <- segment_data[!is.na(loc.start) & !is.na(loc.end) & !is.na(chrom)]
@@ -171,8 +147,7 @@ seg_granges <-
         start.field = "Start",
         end.field = "End", seqinfo = cur_seqinfo
     )
-rm(list = c("raw_CNV", "smoothed_CNA", "cur_cnset", "cbs.segments", "cur_seqinfo", "cur_pheno",
-            "cur_cel", "cur_cnv", "cur_cel", "CNA.object"))
+rm(list = c("raw_CNV", "smoothed_CNA", "cur_cnset", "cbs.segments"))
 gc()
 # Re-annotate samples based on type (batch info from oligoClass is lost)
 all_types <- merge(as.data.table(mcols(seg_granges)), sample_dict[, c("Samples", "Types")],
@@ -187,68 +162,41 @@ mcols(seg_granges) <- all_types
 setwd("~/Paradoxical_Genes/")
 source("Scripts/CNA_to_Gene_Analysis.R")
 
-
+# Normal & Tumor types should be capitalized
+sample_dict$Types <- ifelse(test = sample_dict$Types == "Pt", yes = "Tumor", no = "Normal")
 # Analyze CNA data and find genes in significantly aberrated regions
 # RDS file will be saved as name + CNA_gain_loss
-detach("package:VanillaICE", unload = T)
-detach("package:oligoClasses", unload = T)
-unloadNamespace("oligoClasses")
-unloadNamespace("crlmm")
-unloadNamespace("ff")
-detach("package:crlmm", unload = T)
-detach("package:ff", unload = T)
+analyze_cna(cur_cnv = seg_granges, sample_dict = sample_dict, study_name = "Baltimore_Head_Neck",
+            destdir = "Head_Neck/", pval_thresh = 1)
 gc()
-analyze_cna(cur_cnv = seg_granges, sample_dict = sample_dict,
-            study_name = "OVC",
-            destdir = "BC_Ovarian/", pval_thresh = 1)
-gc()
-
 
 # Differential Expression Analysis ===========================================================
-all_files <- untar(tarfile = "BC_Ovarian/GSE71525_RAW.tar", list = T)
-dir.create("BC_Ovarian/All_IDAT_Files")
-untar(tarfile = "BC_Ovarian/GSE71525_RAW.tar", exdir = "BC_Ovarian/All_IDAT_Files/",
-      files = all_files[grepl(pattern = "idat", x = all_files)])
-
 source("Scripts/Package_Setup.R")
-setwd("~/Paradoxical_Genes/Ovarian/")
-gc()
-ovc <- getGEO(
-    GEO = "GSE19539",
-    destdir = "BC_Ovarian/",
-    GSEMatrix = T,
-    AnnotGPL = T,
-    getGPL = T,
-    parseCharacteristics = T
-)
-
-# Extract phenotypic data
-cur_pheno <- ovc$`GSE19539-GPL6244_series_matrix.txt.gz`
-
-cur_ovc <- cur_pheno$geo_accession[grepl(pattern = "ovc", x = cur_pheno$title)]
-# Subset pheno data
-cur_pheno <- cur_pheno[, cur_pheno$geo_accession %in% cur_ovc]
-
+setwd("Head_Neck/")
+cur_expr_set <- getGEO("GSE33205")
+cur_expr_set <- cur_expr_set[[1]]
+cur_pheno <- phenoData(cur_expr_set)
 
 # Add sample tissue types
 sample_dict <- data.table(
-    Samples = cur_pheno$geo_accession,
-    Types = str_extract(string = cur_pheno$characteristics_ch1.2,
-                        pattern = "(Non-Tumor)|(Tumor)"),
+    Samples = cur_expr_set$geo_accession,
+    Types = str_extract(string = cur_expr_set$characteristics_ch1, pattern = "(Pt)|(Ctrl)"),
     File = paste0(
-        "EXP_CELs/", basename(as.character(cur_pheno$supplementary_file))
+        "Affy_EXP/", basename(as.character(cur_expr_set$supplementary_file))
+        )
     )
-)
-
 if (!require(oligo)) {
     BiocInstaller::biocLite("oligo")
     library(oligo)
 }
 
+
+# Read exonset data
 cur_batch <-
+# Read phenoData from the GEO data
     oligo::read.celfiles(
         filenames = sample_dict$File,
-        phenoData = phenoData(cur_pheno),
+        phenoData = cur_pheno,
         sampleNames = sample_dict$Samples,
         verbose = T
     )
@@ -258,11 +206,11 @@ Sys.setenv(R_THREADS=16)
 cur_expr_set <- rma(cur_batch, target = "core")
 
 # Save
-saveRDS(cur_expr_set, "ovc_Expr_Set.rds")
+saveRDS(cur_expr_set, "Head_Neck_Expr_Set.rds")
 # Use the gcrma algorithm to perform background correction, normalization and summarization
 # cur_expr_set <- gcrma::gcrma(object = cur_affy_batch, fast = F)
 # Update sample names
-sample_dict$Types <- ifelse(sample_dict$Types == "Tumor", "Tumor", "Benign")
+sample_dict$Types <- ifelse(sample_dict$Types == "Pt", "Tumor", "Benign")
 
 # batch_types <- vector(mode = "character", length = length(all_array_cel))
 # batch_types[grepl(pattern = "T\\.CEL", x = all_array_cel)] <- "Tumor"
@@ -272,7 +220,7 @@ sample_dict$Types <- ifelse(sample_dict$Types == "Tumor", "Tumor", "Benign")
 # sample_dict <- data.table(Samples = samples, Types = batch_types)
 # 
 cur_expr_set$`tissue_type` <- merge(as.data.table(colnames(cur_expr_set)),
-                                    sample_dict, by.x = "V1", by.y = "Samples")$Type
+                                 sample_dict, by.x = "V1", by.y = "Samples")$Type
 # Convert to SummarizedExperiment for use with limma
 cur_sumex <- makeSummarizedExperimentFromExpressionSet(cur_expr_set)
 
@@ -280,37 +228,37 @@ setwd("~/Paradoxical_Genes/")
 source("Scripts/limma_func.R")
 limma_func(
     cur_sum_ex = cur_sumex,
-    cur_plot_name = "TIGER ovc Experiment",
+    cur_plot_name = "Baltimore Head and Neck Cancer Experiment",
     cur_min_lfc = 1,
     cur_max_pval = 0.05,
     cur_group_name = "tissue_type",
-    cur_limma_file_name = "ovc",
-    destdir = "ovc_CCA"
+    cur_limma_file_name = "Head_Neck",
+    destdir = "Head_Neck"
 )
 
 # Read the results
-dea_results <- fread("BC_Ovarian/ovc_limma_all_ex_results.txt")
+dea_results <- fread("Head_Neck/Head_Neck_limma_all_ex_results.txt")
 
 # Find differentially expressed genes
 sig_diff <- dea_results[abs(logFC) > 1 & adj.P.Val <= 0.05]
 sig_diff$rn <- as.character(sig_diff$rn)
 
 # Match HuEx probes to genes
-if (!require(hta20transcriptcluster.db)) {
-    BiocInstaller::biocLite("hta20transcriptcluster.db")
-    library(hta20transcriptcluster.db)
+if (!require(huex10sttranscriptcluster.db)) {
+    BiocInstaller::biocLite("huex10sttranscriptcluster.db")
+    library(huex10sttranscriptcluster.db)
 }
 
-columns(hta20transcriptcluster.db)
+columns(huex10sttranscriptcluster.db)
 
-con = hta20transcriptcluster_dbconn()
+con = huex10sttranscriptcluster_dbconn()
 all_probes <- as.data.table(DBI::dbGetQuery(con, "select * from probes where gene_id is not null"))
 sig_probes <- all_probes[probe_id %in% sig_diff$rn]
 # Find the genes associated with the significant probes
 sig_genes <- as.data.table(select(
-    x = hta20transcriptcluster.db,
+    x = huex10sttranscriptcluster.db,
     keys = sig_probes$probe_id,
-    columns = "ENSEMBL",
+    columns = c("GENENAME", "ENSEMBL"),
     keytype = "PROBEID"
 ))
 sig_diff$rn <- as.character(sig_diff$rn)
@@ -320,23 +268,88 @@ sig_diff <- merge(sig_diff, sig_genes, by.x = "rn", by.y = "PROBEID")
 cur_dea <- list(gain = sig_diff[logFC >= 1]$ENSEMBL,
                 loss = sig_diff[logFC <= -1]$ENSEMBL)
 
-cur_cna <- readRDS("ovc_CCA/TIGER-ovc_CNA_gain_loss_genes.rds")
+cur_cna <- readRDS("Head_Neck/Baltimore_Head_Neck_CNA_gain_loss_genes.rds")
 
 source("Scripts/find_paradoxical.R")
 cur_parad <- find_paradoxical(cna_list = cur_cna, dea_list = cur_dea)
 
 # Save
-saveRDS(cur_parad, "ovc_CCA/ovc_Paradoxical_Genes.rds")
+saveRDS(cur_parad, "Head_Neck/Head_Neck_Paradoxical_Genes.rds")
 
 # Save LFC table with probe names replaced with ENSG IDs ====
 all_genes <- unique(as.data.table(select(
-    x = hta20transcriptcluster.db,
+    x = huex10sttranscriptcluster.db,
     keys = all_probes$probe_id,
     columns = "ENSEMBL",
     keytype = "PROBEID"
 )))
-lfc_table <- fread("ovc_CCA/ovc_limma_all_ex_results.txt")
+lfc_table <- fread("Head_Neck/Head_Neck_limma_all_ex_results.txt")
 lfc_table$rn <- as.character(lfc_table$rn)
 lfc_table <- merge(lfc_table, all_genes, by.x = "rn", by.y = "PROBEID")
-fwrite(lfc_table, "ovc_CCA/ovc_limma_all_ex_results.txt")
+fwrite(lfc_table, "Head_Neck/Head_Neck_limma_all_ex_results.txt")
 rm("lfc_table")
+
+
+# Compare to TCGA ==================================================================================
+source("Scripts/Find_TCGA_status.R")
+
+# Read TCGA-PRAD and current paradoxical genes
+tcga_parad <- readRDS("~/Project/Paradoxical_Genes/DESeq2_paradoxical_TCGA-HNSC.rds")
+cur_parad <- readRDS("Head_Neck/Head_Neck_Paradoxical_Genes.rds")
+gain_ov <- sum(cur_parad$parad_exp_gain %in% tcga_parad$over_exp_parad)
+loss_ov <- sum(cur_parad$parad_exp_loss %in% tcga_parad$under_exp_parad)
+parad_gain_count <- length(cur_parad$parad_exp_gain)
+
+gain_sig <- phyper(
+    q = gain_ov - 3,
+    m = length(cur_parad$parad_exp_gain),
+    n = 22011 - parad_gain_count,
+    k = length(tcga_parad$over_exp_parad),
+    lower.tail = F
+)
+
+gain_sig
+
+# Read the Rose-Adams diff-ex and copy number results
+dea_results <- fread("Head_Neck/Head_Neck_limma_all_ex_results.txt")
+copy_results <- fread("Head_Neck/Baltimore_Head_Neck_CNA_nonparam_results.txt")
+gene_dict <- fread("gene_dictionary.txt")
+# Discard chrY
+gene_dict <- gene_dict[chromosome_name %in% c(1:22, "X")]
+# Change chrX and chrY to 23 and 24
+gene_dict$chromosome_name[gene_dict$chromosome_name == "X"] <- "23"
+gene_dict$chromosome_name <- as.integer(gene_dict$chromosome_name)
+
+# Convert to GRanges
+genome_gr <-
+    makeGRangesFromDataFrame(
+        df = gene_dict[, c("start_position",
+                           "end_position",
+                           "chromosome_name",
+                           "ensembl_gene_id")],
+        keep.extra.columns = T,
+        ignore.strand = T,
+        seqnames.field = "chromosome_name",
+        start.field = "start_position",
+        end.field = "end_position")
+
+
+cur_cn_status <-
+    find_cn_status(
+        query_gain = tcga_parad$over_exp_parad,
+        query_loss = tcga_parad$under_exp_parad,
+        segment_values = copy_results,
+        thresh = 0.05,
+        gene_dict = gene_dict,
+        genome_granges = genome_gr
+    )
+cur_exp_status <- find_exp_status(query_gain = tcga_parad$over_exp_parad,
+                                  query_loss = tcga_parad$under_exp_parad,
+                                  lfc_table = dea_results, probe = FALSE,
+                                  genename_col = "ENSEMBL")
+
+# Save
+saveRDS(list(cn_status = cur_cn_status, exp_status = cur_exp_status),
+        "Head_Neck/Head_Neck_TCGA_Comparison.rds")
+
+# Measure significance of overlap ==================================================================

@@ -1,17 +1,17 @@
-# Ovarian.R
+# Chapel_Breast.R
 
 # Load required packages
 source("Scripts/Package_Setup.R")
 setwd("~/Paradoxical_Genes/")
 # Create directory
-dir.create("BC_Ovarian/")
+dir.create("Chapel_Breast")
 
 
-# Download and parse data from GEO; note that this study only has CNA data
+# Download and parse data from GEO
 # The following only has the phenotype data
-ovc <- getGEO(
-    GEO = "GSE45584",
-    destdir = "BC_Ovarian/",
+brca <- getGEO(
+    GEO = "GSE54219",
+    destdir = "Chapel_Breast/",
     GSEMatrix = T,
     AnnotGPL = T,
     getGPL = T,
@@ -19,8 +19,8 @@ ovc <- getGEO(
 )
 
 # Extract phenotypic data
-cur_cnv <- ovc$`GSE45584-GPL16895_series_matrix.txt.gz`
-featureNames(cur_cnv)
+cur_pheno <- brca$
+featureNames(cur_pheno)
 
 # Untar downloaded CEL files
 # (from https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE76213&format=file)
@@ -142,6 +142,10 @@ object.size(cbs.segments)
 
 # Extract processed segment data
 segment_data <- as.data.table(cbs.segments$output)
+
+segment_data <- as.data.table(exprs(cur_pheno))
+sample_dict <- data.table(Samples = cur_pheno$geo_accession,
+                          Types = cur_pheno$title)
 # Fix previous GSM improper name
 # segment_data$ID <- str_extract(string = segment_data$ID, pattern = "GSM\\d+")
 # cbs.segments$output <- segment_data
